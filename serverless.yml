@@ -1,0 +1,200 @@
+service: mirai-api
+
+provider:
+  name: aws
+  runtime: nodejs22.x
+  region: ap-northeast-1
+  stage: dev
+  profile: mirai_api
+
+  vpc:
+    securityGroupIds:
+      - sg-08754dc8114404d72
+
+    subnetIds:
+      - subnet-042a335c64e82a5df
+
+  apiGateway:
+    apiKeySourceType: HEADER
+
+    apiKeys:
+      - name: mirai-api-key
+        value: ${env:API_KEY}
+
+    usagePlan:
+      throttle:
+        burstLimit: 50
+        rateLimit: 20
+
+  environment:
+    DB_TYPE: rds
+    DB_SECRET_NAME: mirai/${sls:stage}/rds
+
+    USERS_TABLE_NAME:
+      Ref: UsersTable
+
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - dynamodb:GetItem
+            - dynamodb:PutItem
+          Resource:
+            Fn::GetAtt:
+              - UsersTable
+              - Arn
+
+        - Effect: Allow
+          Action:
+            - dynamodb:Query
+          Resource:
+            Fn::Sub: "${UsersTable.Arn}/index/email-index"
+
+        - Effect: Allow
+          Action:
+            - ec2:CreateNetworkInterface
+            - ec2:DescribeNetworkInterfaces
+            - ec2:DeleteNetworkInterface
+            - ec2:AssignPrivateIpAddresses
+            - ec2:UnassignPrivateIpAddresses
+          Resource: "*"
+
+        - Effect: Allow
+          Action:
+            - secretsmanager:GetSecretValue
+          Resource:
+            Fn::Sub:
+              - "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${SecretName}-*"
+              - SecretName: mirai/${sls:stage}/rds
+
+functions:
+  api:
+    handler: dist/lambda.handler
+    timeout: 20
+
+    events:
+      - http:
+          path: auth/register
+          method: post
+          cors: true
+          private: true
+
+      - http:
+          path: auth/findbyid
+          method: post
+          cors: true
+          private: true
+
+      - http:
+          path: auth/findbyemail
+          method: post
+          cors: true
+          private: true
+
+resources:
+  Resources:
+    UsersTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:service}-${sls:stage}-users
+        BillingMode: PAY_PER_REQUEST
+
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+
+          - AttributeName: email
+            AttributeType: S
+
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+
+        GlobalSecondaryIndexes:
+          - IndexName: email-index
+            KeySchema:
+              - AttributeName: email
+                KeyType: HASH
+
+            Projection:
+              ProjectionType: ALL
+
+    SecretsManagerVpcEndpoint:
+      Type: AWS::EC2::VPCEndpoint
+      Properties:
+        VpcEndpointType: Interface
+
+        ServiceName:
+          Fn::Sub: "com.amazonaws.${AWS::Region}.secretsmanager"
+
+        VpcId: ${env:VPC_ID}
+
+        PrivateDnsEnabled: true
+
+        SubnetIds:
+          - subnet-042a335c64e82a5df
+
+        SecurityGroupIds:
+          - sg-08754dc8114404d72
+
+    ApiCloudFrontDistribution:
+      Type: AWS::CloudFront::Distribution
+      Properties:
+        DistributionConfig:
+          Enabled: true
+
+          Comment: "mirai-api lambda,apigateway,cloudfront"
+
+          Origins:
+            - Id: ApiGatewayOrigin
+
+              DomainName:
+                Fn::Join:
+                  - ""
+                  - - Ref: ApiGatewayRestApi
+                    - ".execute-api."
+                    - Ref: AWS::Region
+                    - ".amazonaws.com"
+
+              OriginPath: /${sls:stage}
+
+              CustomOriginConfig:
+                HTTPSPort: 443
+                OriginProtocolPolicy: https-only
+
+                OriginSSLProtocols:
+                  - TLSv1.2
+
+          DefaultCacheBehavior:
+            TargetOriginId: ApiGatewayOrigin
+
+            ViewerProtocolPolicy: redirect-to-https
+
+            AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+              - PUT
+              - PATCH
+              - POST
+              - DELETE
+
+            CachedMethods:
+              - GET
+              - HEAD
+
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+
+  Outputs:
+    CloudFrontDomainName:
+      Value:
+        Fn::GetAtt:
+          - ApiCloudFrontDistribution
+          - DomainName
+
+    SecretsManagerVpcEndpointId:
+      Value:
+        Ref: SecretsManagerVpcEndpoint

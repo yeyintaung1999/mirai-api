@@ -1,0 +1,59 @@
+# Dependencies (keep package-lock.json tracked)
+node_modules/
+
+# TypeScript build output
+/dist/
+*.tsbuildinfo
+
+# Serverless deployment artifacts
+/.serverless/
+/.build/
+/.esbuild/
+
+# Environment variables (keep templates tracked)
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Local credentials and infrastructure configuration
+/infra/env/
+/infra/config/
+/certificate/
+/infra/certificate/
+*.key
+*.p12
+*.pfx
+token.sh
+
+# Generated Lambda layers
+/infra/layers/
+
+# Logs and diagnostic reports
+*.log
+npm-debug.log*
+/logs/
+report.*.json
+
+# Test coverage and caches
+/coverage/
+/.nyc_output/
+/.cache/
+
+# Local database backups
+/backup.sql
+
+# Local tooling and editor settings
+/local-setup/
+/.claude/
+/.idea/
+/.vscode/
+*.swp
+*.swo
+*~
+
+# Operating system files
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini
