@@ -33,6 +33,10 @@ provider:
     USERS_TABLE_NAME:
       Ref: UsersTable
 
+    JWT_ACCESS_SECRET: ${env:JWT_ACCESS_SECRET}
+    JWT_REFRESH_SECRET: ${env:JWT_REFRESH_SECRET}
+    API_KEY: ${env:API_KEY}
+    
   iam:
     role:
       statements:
@@ -75,19 +79,37 @@ functions:
 
     events:
       - http:
+          path: user/me
+          method: get
+          cors: true
+          private: true
+
+      - http:
           path: auth/register
           method: post
           cors: true
           private: true
 
       - http:
-          path: auth/findbyid
+          path: user/findbyid
           method: post
           cors: true
           private: true
 
       - http:
-          path: auth/findbyemail
+          path: user/findbyemail
+          method: post
+          cors: true
+          private: true
+      
+      - http:
+          path: auth/login
+          method: post
+          cors: true
+          private: true
+
+      - http:
+          path: auth/refreshtoken
           method: post
           cors: true
           private: true

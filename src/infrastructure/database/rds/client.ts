@@ -14,7 +14,7 @@ const secretsClient = new SecretsManagerClient({
   region: process.env.AWS_REGION ?? "ap-northeast-1",
 });
 
-console.log("1. before Secrets Manager")
+
 
 const response = await secretsClient.send(
   new GetSecretValueCommand({
@@ -22,7 +22,7 @@ const response = await secretsClient.send(
   }),
 );
 
-console.log("2. after Secrets Manager");
+
 
 if (!response.SecretString) {
   throw new Error("RDS secret is empty");
@@ -48,4 +48,6 @@ export const rdsPool = new Pool({
   connectionTimeoutMillis: 5000,
 });
 
-console.log("3. RDS pool created");
+rdsPool.on("error", () => {
+  console.error(JSON.stringify({ timestamp: new Date().toISOString(), level: "error", event: "database_pool_error" }));
+});

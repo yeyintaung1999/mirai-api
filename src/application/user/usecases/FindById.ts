@@ -1,17 +1,18 @@
+import { NotFoundError } from "../../errors/NotFoundError.js";
 import type { UserRepository } from "../../../domain/user/repositories/UserRepository.js";
-import type { FindByIdInput } from "../dto/FindByIdInput.js";
-import type { FindByIdOutput } from "../dto/FindByIdOutput.js";
+import type { FindByIdInput } from "../../user/dto/findById/FindByIdInput.js";
+import type { FindByIdOutput } from "../../user/dto/findById/FindByIdOutput.js";
 
 export class FindById{
     constructor(
         private readonly userRepository: UserRepository,
     ){}
 
-    async execute(input: FindByIdInput):Promise<FindByIdOutput | null> {
+    async execute(input: FindByIdInput):Promise<FindByIdOutput> {
         const user = await this.userRepository.findById(input.id);
 
         if(!user){
-            return null;
+            throw new NotFoundError("User not found");
         }
 
         return {

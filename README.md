@@ -137,10 +137,14 @@ Example user response:
 
 | Status | Meaning |
 | --- | --- |
-| `400` | Zod request validation failed; response includes `error` and `details` |
-| `404` | Lookup found no user; response is `{"message":"No user is found"}` |
+| `400` | Request validation or JSON parsing failed |
+| `401` | Invalid credentials or refresh token |
+| `404` | User or route not found |
 | `409` | Registration's email pre-check found an existing user |
-| `500` | An unhandled application or database error occurred |
+| `413` | Request body exceeds the JSON parser limit |
+| `415` | Unsupported request encoding or charset |
+| `500` | Unexpected application or database failure |
+| `503` | Recognized temporary database availability failure |
 
 Deployed POST routes require an `x-api-key` header. Local Express routes do not enforce that API Gateway requirement. The API key is not a user login or a per-user authorization mechanism.
 
@@ -190,7 +194,7 @@ curl -X POST "${MIRAI_API_BASE_URL}/auth/findbyemail" \
 npx tsc --noEmit
 ```
 
-There are currently no test or lint scripts in `package.json`.
+Run `npm test` for authentication, error-boundary, and Lambda/Express integration tests. Database calls in these tests are mocked; they do not contact AWS. No lint script is configured.
 
 ## Current limitations
 
@@ -199,3 +203,48 @@ There are currently no test or lint scripts in `package.json`.
 - Concurrent registrations can bypass the email pre-check. PostgreSQL enforces uniqueness, but its constraint error is not mapped to `409`; DynamoDB does not enforce email uniqueness.
 - The RDS client currently disables TLS certificate verification with `rejectUnauthorized: false`.
 - Database migrations are manual, and Lambda and the Secrets Manager endpoint each use one configured subnet.
+
+
+## Error response contract
+
+All Express routes and the Lambda HTTP adapter use the same error middleware:
+
+```json
+{
+  "error": {
+    "code": "UNAUTHORIZED",
+    "message": "Invalid email or password",
+    "requestId": "server-generated-uuid"
+  }
+}
+```
+
+Validation responses additionally include `error.details`, a bounded array of
+`{ "path": "email", "code": "invalid_format" }` entries. Clients should branch on
+`error.code`, not message text. Error responses include `Cache-Control: no-store`.
+The `X-Request-Id` response header matches the body and structured error log.
+Request IDs are generated before body parsing and preserved across async calls.
+
+Express 5 forwards rejected controller promises to the shared middleware; controllers need no try/catch. Missing users are reported
+by lookup use cases. Database adapters let failures propagate. The central `errorMiddleware.ts` maps
+recognized connection and throttling failures to 503; unexpected failures remain 500. Writes are not automatically retried. PostgreSQL email
+uniqueness conflicts are mapped centrally to 409. Application errors carry business
+codes only; HTTP status codes and public messages live in the middleware.
+
+Logs omit request bodies, headers, query strings, raw error messages, and causes.
+Unexpected errors retain bounded stack frames for diagnosis. Idle PostgreSQL
+pool errors emit a separate structured event because they occur outside an HTTP
+request. Configuration and initialization errors still fail startup; HTTP
+middleware cannot handle failures before the application is initialized.
+
+Request validation uses `parseRequest(schema, input)` in controllers. Only its
+`RequestValidationError` maps to 400; raw Zod errors from internal validation map
+to 500. Application error codes form a finite TypeScript union, and the central
+HTTP mapping must cover every code. `CONFLICT` uses a generic public message.
+Logs include the HTTP method, matched route template, and allowlisted error kinds
+and dependency codes from up to three causes. They omit arbitrary cause messages.
+
+Operational verification still requires a staging environment: exercise real
+PostgreSQL connection failures, concurrent requests and client disconnects, then
+check log delivery, retention, and alerts. The automated suite mocks database
+calls and does not establish those deployment properties.

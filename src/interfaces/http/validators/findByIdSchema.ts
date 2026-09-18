@@ -1,7 +1,7 @@
 import {z} from "zod";
 
 export const findByIdSchema = z.object({
-    id: z.string()
+    id: z.uuid()
 })
 
 export type FindByIdRequest = z.infer<typeof findByIdSchema>;

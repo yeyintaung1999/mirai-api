@@ -1,19 +1,19 @@
+import { NotFoundError } from "../../errors/NotFoundError.js";
 import type { UserRepository } from "../../../domain/user/repositories/UserRepository.js";
-import type { FindByEmailInput } from "../dto/FindByEmailInput.js";
-import type { FindByEmailOutput } from "../dto/FindByEmailOutput.js";
+import type { FindByEmailInput } from "../../user/dto/findByEmail/FindByEmailInput.js";
+import type { FindByEmailOutput } from "../../user/dto/findByEmail/FindByEmailOutput.js";
 
 export class FindByEmail {
     constructor(
         private readonly userRepository: UserRepository
     ){}
 
-    async execute(input: FindByEmailInput):Promise<FindByEmailOutput | null>{
+    async execute(input: FindByEmailInput):Promise<FindByEmailOutput>{
         const result = await this.userRepository.findByEmail(input.email)
 
         if(!result){
-            return null;
+            throw new NotFoundError("User not found");
         }
-
         return {
             id: result.id,
             email: result.email,

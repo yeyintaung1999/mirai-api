@@ -1,5 +1,5 @@
 import bycrypt from "bcrypt";
-import type { PasswordHasher } from "../../application/auth/ports/PasswordHasher.js";
+import type { PasswordHasher } from "../../application/user/ports/PasswordHasher.js";
 
 export class BcryptPasswordHasher implements PasswordHasher {
     private readonly saltRounds = 12;

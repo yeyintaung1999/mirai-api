@@ -1,8 +1,10 @@
-export abstract class ApplicationError extends Error{
-    abstract readonly statusCode: number;
+export type ApplicationErrorCode = "UNAUTHORIZED" | "INVALID_ACCESS_TOKEN" | "NOT_FOUND" | "CONFLICT";
 
-    constructor(message: string){
-        super(message);
+export abstract class ApplicationError extends Error{
+    abstract readonly code: ApplicationErrorCode;
+
+    constructor(message: string, options?: ErrorOptions){
+        super(message, options);
         this.name = new.target.name;
     }
 }

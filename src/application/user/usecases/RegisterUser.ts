@@ -1,9 +1,9 @@
 import { randomUUID } from "crypto";
 import type {User} from "../../../domain/user/entities/User.js";
 import type {UserRepository} from "../../../domain/user/repositories/UserRepository.js";
-import type {PasswordHasher} from "../ports/PasswordHasher.js";
-import type {RegisterInput} from "../dto/RegisterInput.js";
-import type {RegisterOutput} from "../dto/RegisterOutput.js";
+import type { PasswordHasher } from "../ports/PasswordHasher.js";
+import type {RegisterInput} from "../../user/dto/register/RegisterInput.js";
+import type {RegisterOutput} from "../../user/dto/register/RegisterOutput.js";
 import {ConflictError} from "../../errors/ConflictError.js"
 
 
