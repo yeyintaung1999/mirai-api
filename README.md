@@ -1,56 +1,58 @@
 # MiRai API
 
-A TypeScript and Express API for registering users and finding them by ID or email. It runs locally as an Express server or on AWS Lambda through `serverless-http`, with PostgreSQL (RDS) and DynamoDB repository implementations.
+A TypeScript and Express 5 API for registration, JWT authentication, and user profiles. It runs locally or on AWS Lambda through `serverless-http`, with PostgreSQL (RDS) and DynamoDB repository implementations.
 
-Registration hashes passwords with bcrypt. API responses contain user IDs, email addresses, and creation timestamps; they do not include passwords or password hashes. Login and user sessions are not implemented.
-
-## Technology
-
-- TypeScript with ES modules and strict type checking
-- Express and Zod for HTTP handling and input validation
-- PostgreSQL through `pg`, or DynamoDB through the AWS SDK
-- AWS Secrets Manager for RDS connection credentials
-- Serverless Framework for Lambda, API Gateway, and supporting infrastructure
+Passwords are hashed with bcrypt. User responses expose only `id`, `email`, and `createdAt`; password hashes are excluded.
 
 ## Project structure
 
 ```text
 src/
-  application/       Use cases, DTOs, application errors, and ports
+  application/       Use cases, DTOs, business errors, and ports
   domain/            User entity and repository interface
-  composition/       Use case wiring and database repository selection
-  infrastructure/    Configuration, database adapters, and password hashing
-  interfaces/http/   Routes, controllers, validators, and error middleware
+  composition/       Dependency wiring and database selection
+  infrastructure/    Database adapters, JWT, password hashing, configuration, logging
+  interfaces/http/   Routes, controllers, validators, and middleware
+  types/             Express request type extensions
   app.ts             Shared Express application
-  server.ts          Local HTTP server; loads .env
+  server.ts          Local server; loads .env
   lambda.ts          AWS Lambda handler
-migrations/          PostgreSQL schema SQL
+tests/               Unit and mocked Lambda/Express integration tests
+  load/              k6 scripts
+migrations/          PostgreSQL schema
 serverless.yml       AWS deployment configuration
 ```
 
 ## Local setup
 
-Use Node.js 22 to match the configured Lambda runtime, npm, and AWS credentials with access to the selected database services. Local RDS usage also requires network access to the database, such as through your existing VPN or tunnel.
-
-Install dependencies:
+Use Node.js 22 to match Lambda, npm, and AWS credentials with access to your selected backend.
 
 ```sh
 npm ci
 ```
 
-Create a local `.env` file with the configuration for your chosen backend. Environment files are ignored by Git. The following values are examples, not credentials.
-
-### RDS / PostgreSQL
+Create `.env` locally. Environment files are ignored by Git. The following values are placeholders, not credentials:
 
 ```dotenv
 PORT=3000
-DB_TYPE=rds
 AWS_REGION=ap-northeast-1
 AWS_PROFILE=mirai_api
+JWT_ACCESS_SECRET=replace-with-a-strong-random-secret
+JWT_REFRESH_SECRET=replace-with-a-different-strong-random-secret
+```
+
+Both JWT secrets are required and must differ. Generate independent secrets; do not use the example strings.
+
+### PostgreSQL / RDS
+
+Add to `.env`:
+
+```dotenv
+DB_TYPE=rds
 DB_SECRET_NAME=mirai/dev/rds
 ```
 
-The named Secrets Manager secret must already exist and contain a JSON object with these fields:
+The Secrets Manager secret must exist and contain:
 
 ```json
 {
@@ -62,70 +64,96 @@ The named Secrets Manager secret must already exist and contain a JSON object wi
 }
 ```
 
-The active RDS client reads this secret during application initialization. Although `env.ts` defines `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD`, the RDS client does not use those variables.
+The RDS client retrieves this secret during initialization. `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD` in `env.ts` are not used by the active RDS client. Local execution needs network access to RDS, such as a VPN or tunnel.
 
-Apply [the initial schema](migrations/001_create_users.sql) to the target PostgreSQL database before using the API. With `psql` connection settings already configured for that database:
+With PostgreSQL connection settings configured, apply the initial schema once:
 
 ```sh
 psql -v ON_ERROR_STOP=1 -f migrations/001_create_users.sql
 ```
 
-This SQL creates the `users` table, including a unique email constraint. It is a one-time schema script, not an automatic migration runner, and will fail if the table already exists.
+This creates the users table with a unique email constraint. It is not an automatic migration runner and fails if the table already exists.
 
 ### DynamoDB
 
+Instead of the RDS settings, add:
+
 ```dotenv
-PORT=3000
 DB_TYPE=dynamodb
-AWS_REGION=ap-northeast-1
-AWS_PROFILE=mirai_api
 USERS_TABLE_NAME=mirai-api-dev-users
 ```
 
-The table must have a string partition key named `id` and a global secondary index named `email-index` with a string partition key named `email`. The current client connects to AWS; it does not configure a DynamoDB Local endpoint.
+The table requires a string partition key `id` and a global secondary index `email-index` with string partition key `email`. The client connects to AWS, not a configured DynamoDB Local endpoint.
 
-If `DB_TYPE` is omitted, the application defaults to `dynamodb`. The deployed Lambda is explicitly configured to use `rds`.
+The application defaults to DynamoDB when `DB_TYPE` is omitted. The deployed Lambda explicitly uses RDS.
 
-### Start the server
+### Run
 
 ```sh
 npm run dev
 ```
 
-The default address is `http://localhost:3000`. To run compiled JavaScript:
+Or build and start compiled JavaScript:
 
 ```sh
 npm run build
 npm start
 ```
 
-## API
+The default local address is `http://localhost:3000`.
 
-All endpoints accept JSON with `Content-Type: application/json`.
+## Authentication and endpoints
 
-| Method | Path | Request body | Success |
-| --- | --- | --- | --- |
-| POST | `/auth/register` | `email`, `password` | `201` with the created user |
-| POST | `/auth/findbyid` | `id` | `200` with the matching user |
-| POST | `/auth/findbyemail` | `email` | `200` with the matching user |
+POST bodies use JSON and `Content-Type: application/json`. Every `/user` route requires `Authorization: Bearer <accessToken>`.
 
-Registration requires a valid email and an 8–32 character password containing an uppercase letter, a lowercase letter, a number, and a special character.
+| Method | Path | Request body | Access token | Success |
+| --- | --- | --- | --- | --- |
+| POST | `/auth/register` | `email`, `password` | No | 201, user profile |
+| POST | `/auth/login` | `email`, `password` | No | 200, `accessToken` and `refreshToken` |
+| POST | `/auth/refreshtoken` | `refreshToken` | No | 200, new `accessToken` |
+| GET | `/user/me` | None | Required | 200, authenticated user's profile |
+| POST | `/user/findbyid` | `id` (UUID) | Required | 200, matching user's profile |
+| POST | `/user/findbyemail` | `email` | Required | 200, matching user's profile |
+
+Registration requires a valid email and an 8–32 character password containing uppercase, lowercase, numeric, and special characters.
+
+Access tokens last 15 minutes; refresh tokens last seven days. Refreshing issues an access token only: the existing refresh token is retained. Refresh-token rotation, stored sessions, revocation, and logout are not implemented.
+
+`/user/me` derives identity from the verified token and ignores caller-supplied IDs. Its response uses `Cache-Control: no-store`. The two arbitrary lookup endpoints currently require authentication but do not enforce ownership or admin permissions.
+
+All configured deployed endpoints, including registration, login, and `/user/me`, additionally require `x-api-key` because their API Gateway events use `private: true`. Local Express does not enforce that API key requirement.
+
+### Local example flow
+
+Register and log in:
 
 ```sh
 curl -X POST http://localhost:3000/auth/register \
   -H 'Content-Type: application/json' \
   -d '{"email":"user@example.com","password":"ExamplePass1!"}'
 
-curl -X POST http://localhost:3000/auth/findbyemail \
+curl -X POST http://localhost:3000/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"email":"user@example.com"}'
-
-curl -X POST http://localhost:3000/auth/findbyid \
-  -H 'Content-Type: application/json' \
-  -d '{"id":"replace-with-the-returned-user-id"}'
+  -d '{"email":"user@example.com","password":"ExamplePass1!"}'
 ```
 
-Example user response:
+Login returns:
+
+```json
+{
+  "accessToken": "<access-token>",
+  "refreshToken": "<refresh-token>"
+}
+```
+
+Use the returned access token:
+
+```sh
+curl http://localhost:3000/user/me \
+  -H 'Authorization: Bearer <access-token>'
+```
+
+Example profile response:
 
 ```json
 {
@@ -135,116 +163,111 @@ Example user response:
 }
 ```
 
+Refresh an access token:
+
+```sh
+curl -X POST http://localhost:3000/auth/refreshtoken \
+  -H 'Content-Type: application/json' \
+  -d '{"refreshToken":"<refresh-token>"}'
+```
+
+## Error handling
+
+Express uses one central HTTP error middleware. Recognized application errors expose the message passed by application code; status codes and response formatting remain centralized. Unexpected errors return a generic message.
+
+```json
+{
+  "error": {
+    "code": "UNAUTHORIZED",
+    "message": "Authorization Header is Required",
+    "requestId": "server-generated-uuid"
+  }
+}
+```
+
 | Status | Meaning |
 | --- | --- |
-| `400` | Request validation or JSON parsing failed |
-| `401` | Invalid credentials or refresh token |
-| `404` | User or route not found |
-| `409` | Registration's email pre-check found an existing user |
-| `413` | Request body exceeds the JSON parser limit |
-| `415` | Unsupported request encoding or charset |
-| `500` | Unexpected application or database failure |
-| `503` | Recognized temporary database availability failure |
+| 400 | Invalid request fields, malformed JSON, or invalid body size |
+| 401 | Missing/invalid access credentials, login failure, or invalid refresh token |
+| 404 | User or route not found |
+| 409 | Business conflict or PostgreSQL email uniqueness violation |
+| 413 | Request body too large |
+| 415 | Unsupported body encoding or charset |
+| 500 | Unexpected application or dependency failure |
+| 503 | Recognized temporary dependency availability failure |
 
-Deployed POST routes require an `x-api-key` header. Local Express routes do not enforce that API Gateway requirement. The API key is not a user login or a per-user authorization mechanism.
+Validation errors additionally include `error.details`, an array of `{ "path": "email", "code": "invalid_format" }` entries. Clients should branch on error codes, not message text.
+
+- Controllers use `parseRequest(schema, input)` to mark request validation errors as 400. Internal Zod failures remain 500.
+- Express 5 forwards rejected controller promises automatically.
+- Business error codes have a complete, typed HTTP mapping.
+- Request IDs are generated before JSON parsing and preserved with `AsyncLocalStorage`. `X-Request-Id` matches the error body and log.
+- Error responses use `Cache-Control: no-store`.
+- Structured logs include method, route template, duration, and allowlisted diagnostic codes and cause types. They exclude request bodies, headers, query values, and arbitrary error messages.
+- Already-sent responses are delegated to Express; closed responses are not written again.
+
+Startup failures occur before HTTP middleware can run. Idle PostgreSQL pool errors emit a separate structured log event. API Gateway rejections and other failures outside Express may use a different response format.
 
 ## AWS deployment
 
-The current configuration uses service name `mirai-api`, region `ap-northeast-1`, default stage `dev`, AWS profile `mirai_api`, and the Node.js 22 Lambda runtime.
+The configuration targets Node.js 22, `ap-northeast-1`, stage `dev`, and AWS profile `mirai_api`.
 
 ```text
-Client → CloudFront → API Gateway → Lambda / Express → existing RDS
+Client → CloudFront → API Gateway → Lambda / Express → RDS
                                          ↓
                              Secrets Manager VPC endpoint
 ```
 
-The stack defines a DynamoDB users table, a Secrets Manager interface VPC endpoint, and a CloudFront distribution in addition to the API and Lambda. DynamoDB is provisioned even while RDS is selected. The RDS instance and secret are external prerequisites.
+The stack also creates a DynamoDB users table even when RDS is selected. RDS and its Secrets Manager secret must already exist.
 
-Before deploying:
+Before deployment:
 
-1. Configure the AWS profile `mirai_api` and any required Serverless Framework authentication.
-2. Review the existing subnet and security group IDs in `serverless.yml`; they are specific to the current AWS environment.
-3. Make `API_KEY` and `VPC_ID` available to Serverless variable resolution through your environment or local `.env` file. The VPC must match the configured subnet and security group.
-4. Ensure the secret `mirai/<stage>/rds` exists with the JSON structure documented above, and apply the database schema.
-5. Ensure networking permits Lambda to reach PostgreSQL and the Secrets Manager endpoint. The endpoint uses the existing security group, which must permit the required HTTPS traffic from Lambda.
-
-Build the handler before deploying:
+1. Configure AWS credentials and Serverless Framework access.
+2. Provide `API_KEY`, `VPC_ID`, `JWT_ACCESS_SECRET`, and `JWT_REFRESH_SECRET` through the deployment environment or local `.env`.
+3. Review the hardcoded subnet and security group IDs in `serverless.yml`; they must belong to the configured VPC.
+4. Create the `mirai/<stage>/rds` secret and apply the database schema.
+5. Verify Lambda can reach RDS and the Secrets Manager endpoint. Security groups must allow the necessary database and HTTPS connections.
 
 ```sh
 npm run build
 npx serverless deploy --stage dev
 ```
 
-The handler points to `dist/lambda.handler`, so deployments need an up-to-date compiled build. The secret name, DynamoDB table name, and CloudFront origin path incorporate the selected stage; the subnet and security group IDs do not.
+The handler is `dist/lambda.handler`. Rebuild before deployment. `serverless.yml` explicitly passes the JWT secrets into Lambda.
 
-The stack exports `CloudFrontDomainName` and `SecretsManagerVpcEndpointId`. For CloudFront requests, use `https://<CloudFrontDomainName>/auth/register` without a stage prefix. Direct API Gateway URLs include the stage: `https://<api-id>.execute-api.ap-northeast-1.amazonaws.com/dev/auth/register`.
+The stack outputs `CloudFrontDomainName` and `SecretsManagerVpcEndpointId`. CloudFront URLs omit the stage prefix; direct API Gateway URLs include it:
 
-For example, after setting your deployed base URL and API key in your shell:
+```text
+https://<cloudfront-domain>/user/me
+https://<api-id>.execute-api.ap-northeast-1.amazonaws.com/dev/user/me
+```
+
+With the deployed base URL, API key, and access token set in your shell:
 
 ```sh
-curl -X POST "${MIRAI_API_BASE_URL}/auth/findbyemail" \
-  -H 'Content-Type: application/json' \
+curl "${MIRAI_API_BASE_URL}/user/me" \
   -H "x-api-key: ${API_KEY}" \
-  -d '{"email":"user@example.com"}'
+  -H "Authorization: Bearer ${ACCESS_TOKEN}"
 ```
 
 ## Development checks
 
 ```sh
 npx tsc --noEmit
+npm test
 ```
 
-Run `npm test` for authentication, error-boundary, and Lambda/Express integration tests. Database calls in these tests are mocked; they do not contact AWS. No lint script is configured.
+Tests cover authentication, error handling, current-user behavior, and mocked Lambda/Express requests. Database calls are mocked; these tests do not establish live AWS or database reliability. No lint script is configured.
 
-## Current limitations
+Review scripts under `tests/load` before running k6: confirm the target URL, operation, credentials, and thresholds. Scripts that register users write persistent data; use a dedicated test environment.
 
-- User authentication, authorization, email verification, and password reset are not implemented.
-- API Gateway declares CORS, but the Express application does not add CORS headers to application responses for cross-origin browser clients.
-- Concurrent registrations can bypass the email pre-check. PostgreSQL enforces uniqueness, but its constraint error is not mapped to `409`; DynamoDB does not enforce email uniqueness.
-- The RDS client currently disables TLS certificate verification with `rejectUnauthorized: false`.
-- Database migrations are manual, and Lambda and the Secrets Manager endpoint each use one configured subnet.
+## Remaining limitations
 
-
-## Error response contract
-
-All Express routes and the Lambda HTTP adapter use the same error middleware:
-
-```json
-{
-  "error": {
-    "code": "UNAUTHORIZED",
-    "message": "Invalid email or password",
-    "requestId": "server-generated-uuid"
-  }
-}
-```
-
-Validation responses additionally include `error.details`, a bounded array of
-`{ "path": "email", "code": "invalid_format" }` entries. Clients should branch on
-`error.code`, not message text. Error responses include `Cache-Control: no-store`.
-The `X-Request-Id` response header matches the body and structured error log.
-Request IDs are generated before body parsing and preserved across async calls.
-
-Express 5 forwards rejected controller promises to the shared middleware; controllers need no try/catch. Missing users are reported
-by lookup use cases. Database adapters let failures propagate. The central `errorMiddleware.ts` maps
-recognized connection and throttling failures to 503; unexpected failures remain 500. Writes are not automatically retried. PostgreSQL email
-uniqueness conflicts are mapped centrally to 409. Application errors carry business
-codes only; HTTP status codes and public messages live in the middleware.
-
-Logs omit request bodies, headers, query strings, raw error messages, and causes.
-Unexpected errors retain bounded stack frames for diagnosis. Idle PostgreSQL
-pool errors emit a separate structured event because they occur outside an HTTP
-request. Configuration and initialization errors still fail startup; HTTP
-middleware cannot handle failures before the application is initialized.
-
-Request validation uses `parseRequest(schema, input)` in controllers. Only its
-`RequestValidationError` maps to 400; raw Zod errors from internal validation map
-to 500. Application error codes form a finite TypeScript union, and the central
-HTTP mapping must cover every code. `CONFLICT` uses a generic public message.
-Logs include the HTTP method, matched route template, and allowlisted error kinds
-and dependency codes from up to three causes. They omit arbitrary cause messages.
-
-Operational verification still requires a staging environment: exercise real
-PostgreSQL connection failures, concurrent requests and client disconnects, then
-check log delivery, retention, and alerts. The automated suite mocks database
-calls and does not establish those deployment properties.
+- Arbitrary user lookups lack ownership/admin authorization.
+- Refresh tokens cannot be revoked, rotated, or invalidated through logout.
+- Email verification and password reset are not implemented.
+- DynamoDB registration does not atomically enforce email uniqueness. PostgreSQL does enforce it and maps its email constraint violation to 409.
+- RDS currently uses `rejectUnauthorized: false`; certificate verification needs to be enabled with the trusted CA before production use.
+- API Gateway declares CORS, but Express does not add CORS headers to application responses for cross-origin browser clients.
+- Migrations are manual; Lambda and the Secrets Manager endpoint each use one configured subnet.
+- Real connection failures, client disconnects, load behavior, log retention, and alerting still require staging verification.
